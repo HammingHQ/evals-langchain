@@ -44,14 +44,17 @@ export class HammingCallbackHandler extends BaseCallbackHandler {
     runType?: string,
     name?: string,
   ): Promise<void> {
-    console.log("HCB-1: Chain Started");
-    if (parentRunId) {
-      this.runParent[runId] = parentRunId;
-      return;
+    try {
+      if (parentRunId) {
+        this.runParent[runId] = parentRunId;
+        return;
+      }
+      const monitoringItem = await this.hamming.monitoring.startItem();
+      monitoringItem.setInput(inputs);
+      this.runItems[runId] = monitoringItem;
+    } catch (e) {
+      console.error("HammingCallbackHandler.handleChainStart", e);
     }
-    const monitoringItem = await this.hamming.monitoring.startItem();
-    monitoringItem.setInput(inputs);
-    this.runItems[runId] = monitoringItem;
   }
 
   async handleChainEnd(
@@ -59,21 +62,25 @@ export class HammingCallbackHandler extends BaseCallbackHandler {
     runId: string,
     parentRunId?: string | undefined,
   ): Promise<void> {
-    if (parentRunId) {
-      delete this.runParent[runId];
-      return;
+    try {
+      if (parentRunId) {
+        delete this.runParent[runId];
+        return;
+      }
+      const monitoringItem = this.runItems[runId];
+      if (!monitoringItem) {
+        console.warn("No monitoring item found for runId: ", runId);
+        return;
+      }
+      delete this.runItems[runId];
+      const obj = JSON.parse(JSON.stringify(outputs));
+      monitoringItem.setOutput({
+        response: obj.kwargs?.content,
+      });
+      monitoringItem.end();
+    } catch (e) {
+      console.error("HammingCallbackHandler.handleChainEnd", e);
     }
-    const monitoringItem = this.runItems[runId];
-    if (!monitoringItem) {
-      console.warn("No monitoring item found for runId: ", runId);
-      return;
-    }
-    delete this.runItems[runId];
-    const obj = JSON.parse(JSON.stringify(outputs));
-    monitoringItem.setOutput({
-      response: obj.kwargs?.content,
-    });
-    monitoringItem.end();
   }
 
   async handleChatModelStart(
@@ -86,12 +93,16 @@ export class HammingCallbackHandler extends BaseCallbackHandler {
     metadata?: Record<string, unknown>,
     name?: string,
   ): Promise<void> {
-    const flattenedMessages = messages.flat();
-    const messageDicts = flattenedMessages.map((message) =>
-      convertMessage(message),
-    );
-    this.runLlmInput[runId] = JSON.stringify(messageDicts);
-    this.runLlmSerialized[runId] = llm;
+    try {
+      const flattenedMessages = messages.flat();
+      const messageDicts = flattenedMessages.map((message) =>
+        convertMessage(message),
+      );
+      this.runLlmInput[runId] = JSON.stringify(messageDicts);
+      this.runLlmSerialized[runId] = llm;
+    } catch (e) {
+      console.error("HammingCallbackHandler.handleChatModelStart", e);
+    }
   }
 
   async handleLLMStart(
@@ -104,8 +115,12 @@ export class HammingCallbackHandler extends BaseCallbackHandler {
     metadata?: Record<string, unknown>,
     name?: string,
   ): Promise<void> {
-    this.runLlmInput[runId] = JSON.stringify(prompts);
-    this.runLlmSerialized[runId] = llm;
+    try {
+      this.runLlmInput[runId] = JSON.stringify(prompts);
+      this.runLlmSerialized[runId] = llm;
+    } catch (e) {
+      console.error("HammingCallbackHandler.handleLLMStart", e);
+    }
   }
   async handleLLMEnd(
     output: LLMResult,
@@ -113,34 +128,38 @@ export class HammingCallbackHandler extends BaseCallbackHandler {
     parentRunId?: string,
     tags?: string[],
   ): Promise<void> {
-    const llmInput = this.runLlmInput[runId];
-    const llmSerialized = this.runLlmSerialized[runId];
+    try {
+      const llmInput = this.runLlmInput[runId];
+      const llmSerialized = this.runLlmSerialized[runId];
 
-    const lastGenArr = output.generations[output.generations.length - 1];
-    const lastGen = lastGenArr[lastGenArr.length - 1];
+      const lastGenArr = output.generations[output.generations.length - 1];
+      const lastGen = lastGenArr[lastGenArr.length - 1];
 
-    const params: GenerationParams = {
-      input: llmInput,
-      output: lastGen.text,
-    };
-    if (llmSerialized.id.includes("openai")) {
-      params.metadata = {
-        provider: "openai",
-        model: llmSerialized["kwargs"]["model"],
-        temperature: llmSerialized["kwargs"]["temperature"],
+      const params: GenerationParams = {
+        input: llmInput,
+        output: lastGen.text,
       };
-    }
-
-    if (parentRunId) {
-      const topParentRunId = this._findTopParentRunId(parentRunId);
-      const monitoringItem = this.runItems[topParentRunId];
-      if (!monitoringItem) {
-        console.warn("No monitoring item found for runId: ", topParentRunId);
-        return;
+      if (llmSerialized.id.includes("openai")) {
+        params.metadata = {
+          provider: "openai",
+          model: llmSerialized["kwargs"]["model"],
+          temperature: llmSerialized["kwargs"]["temperature"],
+        };
       }
-      monitoringItem.tracing.logGeneration(params);
-    } else {
-      this.hamming.tracing.logGeneration(params);
+
+      if (parentRunId) {
+        const topParentRunId = this._findTopParentRunId(parentRunId);
+        const monitoringItem = this.runItems[topParentRunId];
+        if (!monitoringItem) {
+          console.warn("No monitoring item found for runId: ", topParentRunId);
+          return;
+        }
+        monitoringItem.tracing.logGeneration(params);
+      } else {
+        this.hamming.tracing.logGeneration(params);
+      }
+    } catch (e) {
+      console.error("HammingCallbackHandler.handleLLMEnd", e);
     }
   }
 
@@ -153,8 +172,12 @@ export class HammingCallbackHandler extends BaseCallbackHandler {
     metadata?: Record<string, unknown> | undefined,
     name?: string,
   ): Promise<void> {
-    this.runRetrieverQuery[runId] = query;
-    this.runRetrieverSerialized[runId] = retriever;
+    try {
+      this.runRetrieverQuery[runId] = query;
+      this.runRetrieverSerialized[runId] = retriever;
+    } catch (e) {
+      console.error("HammingCallbackHandler.handleRetrieverStart", e);
+    }
   }
 
   async handleRetrieverEnd(
@@ -162,25 +185,29 @@ export class HammingCallbackHandler extends BaseCallbackHandler {
     runId: string,
     parentRunId?: string | undefined,
   ): Promise<void> {
-    const query = this.runRetrieverQuery[runId];
-    const serialized = this.runRetrieverSerialized[runId];
-    const params: RetrievalParams = {
-      query,
-      results: documents.map((doc) => doc.pageContent),
-      metadata: {
-        engine: "langchain",
-      },
-    };
-    if (parentRunId) {
-      const topParentRunId = this._findTopParentRunId(parentRunId);
-      const monitoringItem = this.runItems[topParentRunId];
-      if (!monitoringItem) {
-        console.warn("No monitoring item found for runId: ", topParentRunId);
-        return;
+    try {
+      const query = this.runRetrieverQuery[runId];
+      const serialized = this.runRetrieverSerialized[runId];
+      const params: RetrievalParams = {
+        query,
+        results: documents.map((doc) => doc.pageContent),
+        metadata: {
+          engine: "langchain",
+        },
+      };
+      if (parentRunId) {
+        const topParentRunId = this._findTopParentRunId(parentRunId);
+        const monitoringItem = this.runItems[topParentRunId];
+        if (!monitoringItem) {
+          console.warn("No monitoring item found for runId: ", topParentRunId);
+          return;
+        }
+        monitoringItem.tracing.logRetrieval(params);
+      } else {
+        this.hamming.tracing.logRetrieval(params);
       }
-      monitoringItem.tracing.logRetrieval(params);
-    } else {
-      this.hamming.tracing.logRetrieval(params);
+    } catch (e) {
+      console.error("HammingCallbackHandler.handleRetrieverEnd", e);
     }
   }
 
